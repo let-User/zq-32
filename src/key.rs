@@ -10,9 +10,9 @@ static mut BUF:  [u8; BUF_SIZE] = [0; BUF_SIZE];
 static mut HEAD: usize = 0;
 static mut TAIL: usize = 0;
 
-// ============================================================
-//  Низкоуровневый I/O
-// ============================================================
+// отладочный вывод в правый нижний угол
+static mut DBG_X: usize = 0;
+static mut DBG_Y: usize = 22;
 
 #[inline]
 unsafe fn inb(port: u16) -> u8 {
@@ -21,21 +21,6 @@ unsafe fn inb(port: u16) -> u8 {
          options(nomem, nostack, preserves_flags));
     v
 }
-
-#[inline]
-unsafe fn outb(port: u16, val: u8) {
-    asm!("out dx, al", in("dx") port, in("al") val,
-         options(nomem, nostack, preserves_flags));
-}
-
-#[inline]
-unsafe fn outb_cmd(val: u8) {
-    outb(KBD_STATUS, val);
-}
-
-// ============================================================
-//  Таблица Scancode Set 1 -> ASCII
-// ============================================================
 
 static ASCII: [u8; 58] = [
     0,  27, b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8',
@@ -48,26 +33,16 @@ static ASCII: [u8; 58] = [
     b',', b'.', b'/', 0, b'*', 0, b' ',
 ];
 
-// ============================================================
-//  Кольцевой буфер
-// ============================================================
-
 fn push(ch: u8) {
     unsafe {
         let next = (HEAD + 1) % BUF_SIZE;
-        if next == TAIL { return; } // полон
+        if next == TAIL { return; }
         BUF[HEAD] = ch;
         HEAD = next;
     }
 }
 
-// ============================================================
-//  Инициализация (вызвать ДО sti!)
-// ============================================================
-
 pub unsafe fn init() {
-    // Только дренируем output buffer PS/2, чтобы не застрял
-    // старый байт (иначе IRQ1 не придёт).
     let mut guard = 10_000;
     while (inb(KBD_STATUS) & 0x01) != 0 && guard > 0 {
         let _ = inb(KBD_DATA);
@@ -75,22 +50,33 @@ pub unsafe fn init() {
     }
 }
 
-// ============================================================
-//  Обработчик IRQ1
-// ============================================================
+pub static mut IRQ1_COUNT: u64 = 0;
 
 pub fn on_irq() {
+    unsafe { IRQ1_COUNT += 1; }
+
     let code = unsafe { inb(KBD_DATA) };
-    if code & 0x80 != 0 { return; } // отпускание
+
+    // hex внизу (строка 16, если 800x600)
+    unsafe {
+        let hi = (code >> 4) & 0xF;
+        let lo = code & 0xF;
+        let to_hex = |n: u8| if n < 10 { b'0' + n } else { b'a' + (n - 10) };
+
+        crate::vga::put_at(16, DBG_X,     to_hex(hi));
+        crate::vga::put_at(16, DBG_X + 1, to_hex(lo));
+        crate::vga::put_at(16, DBG_X + 2, b' ');
+
+        DBG_X += 3;
+        if DBG_X >= 45 { DBG_X = 0; }
+    }
+
+    if code & 0x80 != 0 { return; }
     let i = code as usize;
     if i >= ASCII.len() { return; }
     let c = ASCII[i];
     if c != 0 { push(c); }
 }
-
-// ============================================================
-//  Забрать символ из буфера
-// ============================================================
 
 pub fn try_get() -> Option<u8> {
     unsafe {

@@ -6,3 +6,6 @@ expenses.db*
 name
 *.bat
 x86_64-blog_os.json
+/efi.img
+/iso_root
+/goob-kill-uefi.iso
